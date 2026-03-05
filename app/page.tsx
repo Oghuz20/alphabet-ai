@@ -9,24 +9,20 @@ const CANVAS_SIZE = 280;
 const MODEL_INPUT = 28;
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-// We will use the 52-class model and merge upper+lower probabilities -> 26 letters
+// 52-class model (A–Z + a–z). We merge upper+lower probabilities -> 26 letters
 const MODEL_URL = "/model52/model.json";
 
-// Your best working orientation so far (upright, not upside down)
-const EMNIST_TRANSPOSE = true;
-const EMNIST_FLIP_AXIS: 1 | 2 = 1; // keep 1 as you said this fixes upside-down
-
-// Preprocess thresholds
-const BIN_THRESH = 0.20; // binarize threshold for ink (tune 0.15..0.30)
-const CONF_THRESH = 0.60; // if below, show "?"
+// thresholds
+const BIN_THRESH = 0.2; // 0.15..0.30 usually ok
+const CONF_THRESH = 0.6; // below -> show "?"
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const previewRef = useRef<HTMLCanvasElement | null>(null);
 
-  // offscreen canvases (created client-side to avoid SSR "document is not defined")
+  // offscreen canvases (client-only to avoid SSR document errors)
   const hiddenCanvasRef = useRef<HTMLCanvasElement | null>(null); // 280x280 snapshot
-  const outCanvasRef = useRef<HTMLCanvasElement | null>(null); // 28x28 centered image
+  const outCanvasRef = useRef<HTMLCanvasElement | null>(null); // 28x28 centered
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [model, setModel] = useState<tf.GraphModel | null>(null);
@@ -133,6 +129,7 @@ export default function Home() {
     const ctx = canvas.getContext("2d")!;
     ctx.fillStyle = "white";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
     setTop([]);
     setMain(null);
     setStatus(model ? "Cleared. Draw a letter and Predict." : status);
@@ -161,7 +158,7 @@ export default function Home() {
     const img = sctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE);
     const d = img.data;
 
-    // find ink bbox (non-white pixels)
+    // bbox of ink
     let minX = CANVAS_SIZE,
       minY = CANVAS_SIZE,
       maxX = -1,
@@ -183,14 +180,12 @@ export default function Home() {
       }
     }
 
-    // Prepare output 28x28
     const octx = outCanvas.getContext("2d")!;
     octx.fillStyle = "white";
     octx.fillRect(0, 0, MODEL_INPUT, MODEL_INPUT);
 
-    // if nothing drawn -> blank 28x28
+    // blank
     if (maxX < 0 || maxY < 0) {
-      // show blank in preview too
       if (previewRef.current) {
         const pctx = previewRef.current.getContext("2d")!;
         pctx.imageSmoothingEnabled = false;
@@ -200,7 +195,7 @@ export default function Home() {
       return octx.getImageData(0, 0, MODEL_INPUT, MODEL_INPUT);
     }
 
-    // padding bbox
+    // pad bbox
     const pad = 12;
     minX = Math.max(0, minX - pad);
     minY = Math.max(0, minY - pad);
@@ -210,17 +205,15 @@ export default function Home() {
     const w = maxX - minX + 1;
     const h = maxY - minY + 1;
 
-    // aspect-preserving scale into 28x28
     const scale = Math.min(MODEL_INPUT / w, MODEL_INPUT / h);
     const nw = Math.max(1, Math.round(w * scale));
     const nh = Math.max(1, Math.round(h * scale));
     const dx = Math.floor((MODEL_INPUT - nw) / 2);
     const dy = Math.floor((MODEL_INPUT - nh) / 2);
 
-    // draw crop directly from hiddenCanvas -> outCanvas
     octx.drawImage(hiddenCanvas, minX, minY, w, h, dx, dy, nw, nh);
 
-    // Debug preview (show 28x28 scaled up)
+    // debug preview
     if (previewRef.current) {
       const pctx = previewRef.current.getContext("2d")!;
       pctx.imageSmoothingEnabled = false;
@@ -236,7 +229,7 @@ export default function Home() {
       const data = img28.data;
       const arr = new Float32Array(MODEL_INPUT * MODEL_INPUT);
 
-      // 1) grayscale + invert (ink high)
+      // grayscale + invert (ink high)
       for (let i = 0; i < MODEL_INPUT * MODEL_INPUT; i++) {
         const r = data[i * 4 + 0];
         const g = data[i * 4 + 1];
@@ -245,61 +238,52 @@ export default function Home() {
         arr[i] = 1.0 - gray;
       }
 
-      // 2) [1,28,28,1]
       let x = tf.tensor4d(arr, [1, 28, 28, 1]);
 
-      // 3) binarize (makes canvas drawings match EMNIST better)
+      // binarize
       x = tf.where(x.greater(tf.scalar(BIN_THRESH)), tf.onesLike(x), tf.zerosLike(x));
 
-      // 4) center by mass (shift to center)
+      // center by mass
       x = centerByMass(x);
 
-      // 5) orientation fix (your working one)
-      if (EMNIST_TRANSPOSE) {
-        // Fix left-right mirror first
-        x = tf.reverse(x, [2]);
-
-        // EMNIST orientation fix
-        x = tf.transpose(x, [0, 2, 1, 3]);
-        x = tf.reverse(x, [1]);
-      }
+      // FINAL working transform (fix mirror + emnist alignment)
+      x = tf.reverse(x, [2]); // fix left-right mirror
+      x = tf.transpose(x, [0, 2, 1, 3]);
+      x = tf.reverse(x, [1]); // fixes upside-down for your model
 
       return x;
     });
   }
 
   function centerByMass(x: tf.Tensor4D): tf.Tensor4D {
-    // x: [1,28,28,1] values 0/1
     return tf.tidy(() => {
       const img = x.squeeze() as tf.Tensor2D; // [28,28]
 
-      const mass = img.sum().add(1e-6); // avoid divide-by-zero
+      const mass = img.sum().add(1e-6);
 
-      // build coordinate grids
-      const ys = tf.tile(tf.range(0, 28).reshape([28, 1]), [1, 28]).toFloat(); // [28,28]
-      const xs = tf.tile(tf.range(0, 28).reshape([1, 28]), [28, 1]).toFloat(); // [28,28]
+      const ys = tf.tile(tf.range(0, 28).reshape([28, 1]), [1, 28]).toFloat();
+      const xs = tf.tile(tf.range(0, 28).reshape([1, 28]), [28, 1]).toFloat();
 
-      const cy = img.mul(ys).sum().div(mass); // scalar
-      const cx = img.mul(xs).sum().div(mass); // scalar
+      const cy = img.mul(ys).sum().div(mass);
+      const cx = img.mul(xs).sum().div(mass);
 
-      const shiftY = tf.round(tf.scalar(13.5).sub(cy)).toInt(); // scalar int
-      const shiftX = tf.round(tf.scalar(13.5).sub(cx)).toInt(); // scalar int
+      const shiftY = tf.round(tf.scalar(13.5).sub(cy)).toInt();
+      const shiftX = tf.round(tf.scalar(13.5).sub(cx)).toInt();
 
-      // Convert to JS numbers safely inside tidy
       const sy = shiftY.arraySync() as number;
       const sx = shiftX.arraySync() as number;
 
       const padded = tf.pad(img, [
         [28, 28],
         [28, 28],
-      ]); // [84,84]
+      ]);
 
       const startY = 28 + sy;
       const startX = 28 + sx;
 
-      const shifted = padded.slice([startY, startX], [28, 28]); // [28,28]
+      const shifted = padded.slice([startY, startX], [28, 28]);
 
-      return shifted.expandDims(0).expandDims(-1) as tf.Tensor4D; // [1,28,28,1]
+      return shifted.expandDims(0).expandDims(-1) as tf.Tensor4D;
     });
   }
 
@@ -317,18 +301,14 @@ export default function Home() {
     const probs52 = (await outTensor.data()) as Float32Array;
     outTensor.dispose();
 
-    // Merge upper + lower => 26 probs
+    // merge upper + lower => 26
     const probs26 = new Float32Array(26);
-    for (let i = 0; i < 26; i++) {
-      probs26[i] = probs52[i] + probs52[i + 26];
-    }
+    for (let i = 0; i < 26; i++) probs26[i] = probs52[i] + probs52[i + 26];
 
-    // top-3
     const indexed = Array.from(probs26).map((p, i) => ({ i, p }));
     indexed.sort((a, b) => b.p - a.p);
     const top3 = indexed.slice(0, 3).map(({ i, p }) => ({ ch: LETTERS[i], p }));
 
-    // confidence gate
     const best = top3[0];
     if (best.p < CONF_THRESH) {
       setMain({ ch: "?", p: best.p });
@@ -341,6 +321,8 @@ export default function Home() {
     setTop(top3);
     setStatus("Done ✅");
   }
+
+  const confidencePct = main ? Math.round(main.p * 1000) / 10 : 0;
 
   return (
     <main style={styles.page}>
@@ -386,15 +368,29 @@ export default function Home() {
             {main ? (
               <>
                 <div style={styles.bigLetter}>{main.ch}</div>
-                <div style={styles.conf}>Confidence: {(main.p * 100).toFixed(1)}%</div>
+
+                <div style={styles.confRow}>
+                  <span style={styles.confText}>Confidence: {confidencePct}%</span>
+                  <span style={styles.confHint}>{main.ch === "?" ? "Try again" : "Good"}</span>
+                </div>
+
+                {/* Confidence bar (small UI improvement) */}
+                <div style={styles.barWrap}>
+                  <div style={{ ...styles.barFill, width: `${Math.min(100, Math.max(0, main.p * 100))}%` }} />
+                </div>
 
                 <div style={styles.divider} />
 
                 <div style={styles.h3}>Top 3</div>
-                <div style={{ display: "grid", gap: 10 }}>
+
+                {/* Top 3 with probability bars */}
+                <div style={{ display: "grid", gap: 10, marginTop: 8 }}>
                   {top.map((p) => (
-                    <div key={p.ch} style={styles.row}>
+                    <div key={p.ch} style={styles.miniBarRow}>
                       <span style={styles.rowLeft}>{p.ch}</span>
+                      <div style={styles.miniBarTrack}>
+                        <div style={{ ...styles.miniBarFill, width: `${Math.min(100, Math.max(0, p.p * 100))}%` }} />
+                      </div>
                       <span style={styles.rowRight}>{(p.p * 100).toFixed(1)}%</span>
                     </div>
                   ))}
@@ -408,8 +404,7 @@ export default function Home() {
 
             <div style={styles.h3}>Model input (debug)</div>
             <p style={{ marginTop: 6, opacity: 0.75, fontSize: 13 }}>
-              This shows the 28×28 image after centering/resizing. If this looks correct but predictions are wrong, preprocessing is the
-              issue (binarize + centering helps a lot).
+              This shows the 28×28 image after centering/resizing. It should look like your letter, centered, with black ink on white.
             </p>
             <canvas ref={previewRef} width={220} height={220} style={{ ...styles.canvas, width: 220, height: 220 }} />
           </div>
@@ -475,24 +470,83 @@ const styles: Record<string, React.CSSProperties> = {
     color: "white",
     fontWeight: 800,
     cursor: "pointer",
+    transition: "transform 120ms ease, background 120ms ease",
   },
   btnPrimary: {
     padding: "10px 14px",
     borderRadius: 12,
     border: "1px solid rgba(255,255,255,0.25)",
-    background: "rgba(99, 102, 241, 0.85)",
+    background: "rgba(99, 102, 241, 0.9)",
     color: "white",
     fontWeight: 900,
     cursor: "pointer",
     flex: 1,
+    transition: "transform 120ms ease, filter 120ms ease, opacity 120ms ease",
+    opacity: 1,
   },
   tip: { marginTop: 10, opacity: 0.75, fontSize: 13 },
+
   h2: { margin: 0, fontSize: 18 },
   bigLetter: { fontSize: 70, fontWeight: 950, lineHeight: 1, marginTop: 10 },
-  conf: { opacity: 0.8, marginTop: 6 },
+
+  confRow: {
+    marginTop: 8,
+    display: "flex",
+    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 10,
+  },
+  confText: { opacity: 0.9, fontWeight: 800 },
+  confHint: {
+    opacity: 0.8,
+    fontSize: 12,
+    padding: "4px 10px",
+    borderRadius: 999,
+    border: "1px solid rgba(255,255,255,0.14)",
+    background: "rgba(255,255,255,0.06)",
+    whiteSpace: "nowrap",
+  },
+
+  // UI improvement bars
+  barWrap: {
+    marginTop: 10,
+    background: "rgba(255,255,255,0.08)",
+    border: "1px solid rgba(255,255,255,0.12)",
+    borderRadius: 999,
+    height: 10,
+    overflow: "hidden",
+  },
+  barFill: {
+    height: "100%",
+    borderRadius: 999,
+    background: "rgba(99, 102, 241, 0.95)",
+    width: "0%",
+    transition: "width 250ms ease",
+  },
+  miniBarRow: {
+    display: "grid",
+    gridTemplateColumns: "30px 1fr 60px",
+    alignItems: "center",
+    gap: 10,
+  },
+  miniBarTrack: {
+    height: 8,
+    borderRadius: 999,
+    background: "rgba(255,255,255,0.08)",
+    overflow: "hidden",
+    border: "1px solid rgba(255,255,255,0.1)",
+  },
+  miniBarFill: {
+    height: "100%",
+    borderRadius: 999,
+    background: "rgba(255,255,255,0.55)",
+    width: "0%",
+    transition: "width 250ms ease",
+  },
+
   divider: { height: 1, background: "rgba(255,255,255,0.12)", margin: "14px 0" },
   h3: { fontWeight: 900, opacity: 0.95 },
-  row: { display: "flex", justifyContent: "space-between", alignItems: "center" },
+
   rowLeft: { fontSize: 18, fontWeight: 900 },
-  rowRight: { opacity: 0.8, fontWeight: 800 },
+  rowRight: { opacity: 0.85, fontWeight: 800 },
 };
