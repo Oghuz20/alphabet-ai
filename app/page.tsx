@@ -1,65 +1,125 @@
-import Image from "next/image";
+"use client";
+
+import * as tf from "@tensorflow/tfjs";
+import { useEffect, useRef, useState } from "react";
+
+const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
 export default function Home() {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [model, setModel] = useState<tf.GraphModel | null>(null);
+  const [result, setResult] = useState("");
+
+  useEffect(() => {
+    const loadModel = async () => {
+      const m = await tf.loadGraphModel("/model/model.json");
+      setModel(m);
+    };
+
+    loadModel();
+  }, []);
+
+  const clearCanvas = () => {
+    const canvas = canvasRef.current!;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    setResult("");
+  };
+
+  const predict = async () => {
+    if (!model) return;
+
+    const canvas = canvasRef.current!;
+    const ctx = canvas.getContext("2d")!;
+
+    const small = document.createElement("canvas");
+    small.width = 28;
+    small.height = 28;
+
+    const sctx = small.getContext("2d")!;
+    sctx.drawImage(canvas, 0, 0, 28, 28);
+
+    const img = sctx.getImageData(0, 0, 28, 28);
+    const data = img.data;
+
+    const arr = new Float32Array(28 * 28);
+
+    for (let i = 0; i < 28 * 28; i++) {
+      const gray =
+        (data[i * 4] + data[i * 4 + 1] + data[i * 4 + 2]) / 3 / 255;
+
+      arr[i] = 1 - gray;
+    }
+
+    const input = tf.tensor4d(arr, [1, 28, 28, 1]);
+
+    const prediction = model.predict(input) as tf.Tensor;
+
+    const probs = await prediction.data();
+
+    let maxIndex = 0;
+
+    for (let i = 1; i < probs.length; i++) {
+      if (probs[i] > probs[maxIndex]) maxIndex = i;
+    }
+
+    const letter = letters[maxIndex];
+    const confidence = (probs[maxIndex] * 100).toFixed(1);
+
+    setResult(`${letter} (${confidence}%)`);
+  };
+
+  const startDrawing = (e: any) => {
+    const ctx = canvasRef.current!.getContext("2d")!;
+    ctx.beginPath();
+    ctx.moveTo(e.nativeEvent.offsetX, e.nativeEvent.offsetY);
+    canvasRef.current!.onmousemove = draw;
+  };
+
+  const draw = (e: any) => {
+    const ctx = canvasRef.current!.getContext("2d")!;
+    ctx.lineTo(e.offsetX, e.offsetY);
+    ctx.stroke();
+  };
+
+  const stopDrawing = () => {
+    canvasRef.current!.onmousemove = null;
+  };
+
+  useEffect(() => {
+    const ctx = canvasRef.current!.getContext("2d")!;
+
+    ctx.fillStyle = "white";
+    ctx.fillRect(0, 0, 280, 280);
+
+    ctx.strokeStyle = "black";
+    ctx.lineWidth = 15;
+    ctx.lineCap = "round";
+  }, []);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <main style={{ textAlign: "center", marginTop: 40 }}>
+      <h1>Handwritten Alphabet Predictor</h1>
+
+      <canvas
+        ref={canvasRef}
+        width={280}
+        height={280}
+        style={{ border: "2px solid black", background: "white" }}
+        onMouseDown={startDrawing}
+        onMouseUp={stopDrawing}
+        onMouseLeave={stopDrawing}
+      />
+
+      <div style={{ marginTop: 20 }}>
+        <button onClick={predict}>Predict</button>
+        <button onClick={clearCanvas} style={{ marginLeft: 10 }}>
+          Clear
+        </button>
+      </div>
+
+      <h2 style={{ marginTop: 20 }}>{result}</h2>
+    </main>
   );
 }

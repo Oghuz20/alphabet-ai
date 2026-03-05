@@ -1,36 +1,184 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Handwritten Alphabet Predictor (A–Z)
 
-## Getting Started
+A browser-based AI application that recognizes handwritten alphabet letters drawn by the user.
 
-First, run the development server:
+The system uses a Convolutional Neural Network (CNN) trained on the **EMNIST dataset** and runs directly in the browser using **TensorFlow.js**.
+Users can draw a letter on a canvas and the model predicts the corresponding alphabet character.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+The model is **case-insensitive**, meaning that whether the user draws **uppercase or lowercase**, the system predicts the correct letter (A–Z).
+
+---
+
+# Live Demo
+
+Deployed application: https://alphabet-ai.vercel.app
+
+---
+
+# Features
+
+• Draw letters directly in the browser
+• Real-time AI prediction
+• Case-insensitive recognition (A–Z)
+• Runs completely in the browser (no backend server)
+• Lightweight TensorFlow.js model
+
+---
+
+# Tech Stack
+
+### Machine Learning
+
+* TensorFlow
+* TensorFlow Datasets
+* EMNIST (Extended MNIST)
+
+### Frontend
+
+* Next.js
+* React
+* HTML Canvas API
+
+### Deployment
+
+* TensorFlow.js
+* Vercel
+
+---
+
+# Model Training
+
+The CNN model was trained using the **EMNIST ByClass dataset**.
+
+Original dataset classes:
+
+```
+0–9   : digits
+10–35 : uppercase letters
+36–61 : lowercase letters
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+For this project, uppercase and lowercase were **merged into 26 classes** so that:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```
+A / a → A
+B / b → B
+...
+Z / z → Z
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This makes the prediction independent of case.
 
-## Learn More
+---
 
-To learn more about Next.js, take a look at the following resources:
+# Model Architecture
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+Convolutional Neural Network:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+```
+Input (28x28 grayscale)
 
-## Deploy on Vercel
+Conv2D (32)
+BatchNorm
+ReLU
+MaxPooling
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+Conv2D (64)
+BatchNorm
+ReLU
+MaxPooling
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Conv2D (128)
+BatchNorm
+ReLU
+MaxPooling
+
+Flatten
+Dense (256)
+Dropout
+Dense (26 softmax)
+```
+
+Test Accuracy:
+
+**~94.9%**
+
+---
+
+# Project Structure
+
+```
+alphabet-ai
+│
+├── app/                     # Next.js frontend
+│
+├── public/
+│   └── model/               # TensorFlow.js model
+│       ├── model.json
+│       └── group1-shard1of1.bin
+│
+├── training/                # Model training scripts
+│   ├── train_26.py
+│   └── requirements.txt
+│
+├── README.md
+└── package.json
+```
+
+---
+
+# Running Locally
+
+Clone the repository:
+
+```
+git clone https://github.com/Oghuz20/alphabet-ai.git
+cd alphabet-ai
+```
+
+Install dependencies:
+
+```
+npm install
+```
+
+Run development server:
+
+```
+npm run dev
+```
+
+Open in browser:
+
+```
+http://localhost:3000
+```
+
+---
+
+# How Prediction Works
+
+1. User draws a letter on the canvas.
+2. The canvas image is resized to **28x28 pixels**.
+3. The image is converted to **grayscale**.
+4. Pixel values are normalized.
+5. The TensorFlow.js model predicts probabilities for **26 letters**.
+6. The letter with the highest probability is displayed.
+
+---
+
+# Future Improvements
+
+• Improve real drawing accuracy using **centering and scaling preprocessing**
+• Add **top-3 predictions display**
+• Improve UI/UX design
+• Add **mobile drawing support**
+• Optimize model size for faster loading
+
+---
+
+# Author
+
+**Oghuz Hasanli**
+
+Machine Learning & AI student passionate about building real-world AI systems.
