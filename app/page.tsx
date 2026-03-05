@@ -228,15 +228,19 @@ export default function Home() {
     if (!model) return;
     setStatus("Predicting…");
 
-    const probs = await tf.tidy(async () => {
+    // 1) Build input + run model inside tidy (SYNC)
+    const outTensor = tf.tidy(() => {
       const img28 = build28x28FromCanvas();
-      const x = imageDataToTensor28(img28);
-      const y = model.predict(x) as tf.Tensor; // [1,26]
-      const out = await y.data();
-      return out as Float32Array;
+      const x = imageDataToTensor28(img28);      // [1,28,28,1]
+      const y = model.predict(x) as tf.Tensor;   // [1,26]
+      return y.squeeze();                        // [26]  <-- returned tensor (kept alive)
     });
 
-    // top-3
+    // 2) Read probabilities OUTSIDE tidy (ASYNC OK)
+    const probs = (await outTensor.data()) as Float32Array;
+    outTensor.dispose();
+
+    // 3) Compute top-3
     const indexed = Array.from(probs).map((p, i) => ({ i, p }));
     indexed.sort((a, b) => b.p - a.p);
 
@@ -249,7 +253,6 @@ export default function Home() {
     setTop(top3);
     setStatus("Done ✅");
   }
-
   return (
     <main style={styles.page}>
       <div style={styles.shell}>
