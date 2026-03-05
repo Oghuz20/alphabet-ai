@@ -8,7 +8,17 @@ type Pred = { ch: string; p: number };
 const CANVAS_SIZE = 280;
 const MODEL_INPUT = 28;
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const EMNIST_FIX_MODE = 2; 
+
+// We will use the 52-class model and merge upper+lower probabilities -> 26 letters
+const MODEL_URL = "/model52/model.json";
+
+// Your best working orientation so far (upright, not upside down)
+const EMNIST_TRANSPOSE = true;
+const EMNIST_FLIP_AXIS: 1 | 2 = 1; // keep 1 as you said this fixes upside-down
+
+// Preprocess thresholds
+const BIN_THRESH = 0.20; // binarize threshold for ink (tune 0.15..0.30)
+const CONF_THRESH = 0.60; // if below, show "?"
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -16,7 +26,7 @@ export default function Home() {
 
   // offscreen canvases (created client-side to avoid SSR "document is not defined")
   const hiddenCanvasRef = useRef<HTMLCanvasElement | null>(null); // 280x280 snapshot
-  const outCanvasRef = useRef<HTMLCanvasElement | null>(null); // 28x28 centered
+  const outCanvasRef = useRef<HTMLCanvasElement | null>(null); // 28x28 centered image
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [model, setModel] = useState<tf.GraphModel | null>(null);
@@ -59,7 +69,7 @@ export default function Home() {
     (async () => {
       try {
         await tf.ready();
-        const m = await tf.loadGraphModel("/model52/model.json");
+        const m = await tf.loadGraphModel(MODEL_URL);
         if (!mounted) return;
 
         // warmup
@@ -72,9 +82,10 @@ export default function Home() {
         setStatus("Model loaded ✅ Draw a letter and click Predict.");
       } catch (e) {
         console.error(e);
-        setStatus("Failed to load model. Check /public/model/* files.");
+        setStatus("Failed to load model. Check /public/model52/* files.");
       }
     })();
+
     return () => {
       mounted = false;
     };
@@ -179,6 +190,13 @@ export default function Home() {
 
     // if nothing drawn -> blank 28x28
     if (maxX < 0 || maxY < 0) {
+      // show blank in preview too
+      if (previewRef.current) {
+        const pctx = previewRef.current.getContext("2d")!;
+        pctx.imageSmoothingEnabled = false;
+        pctx.clearRect(0, 0, previewRef.current.width, previewRef.current.height);
+        pctx.drawImage(outCanvas, 0, 0, previewRef.current.width, previewRef.current.height);
+      }
       return octx.getImageData(0, 0, MODEL_INPUT, MODEL_INPUT);
     }
 
@@ -199,7 +217,7 @@ export default function Home() {
     const dx = Math.floor((MODEL_INPUT - nw) / 2);
     const dy = Math.floor((MODEL_INPUT - nh) / 2);
 
-    // draw crop directly from hiddenCanvas -> outCanvas (no document.createElement here)
+    // draw crop directly from hiddenCanvas -> outCanvas
     octx.drawImage(hiddenCanvas, minX, minY, w, h, dx, dy, nw, nh);
 
     // Debug preview (show 28x28 scaled up)
@@ -214,59 +232,108 @@ export default function Home() {
   }
 
   function imageDataToTensor28(img28: ImageData): tf.Tensor4D {
-    const data = img28.data;
-    const arr = new Float32Array(MODEL_INPUT * MODEL_INPUT);
+    return tf.tidy(() => {
+      const data = img28.data;
+      const arr = new Float32Array(MODEL_INPUT * MODEL_INPUT);
 
-    for (let i = 0; i < MODEL_INPUT * MODEL_INPUT; i++) {
-      const r = data[i * 4 + 0];
-      const g = data[i * 4 + 1];
-      const b = data[i * 4 + 2];
-      const gray = (r + g + b) / (3 * 255);
-      arr[i] = 1.0 - gray; // invert so ink is high
-    }
+      // 1) grayscale + invert (ink high)
+      for (let i = 0; i < MODEL_INPUT * MODEL_INPUT; i++) {
+        const r = data[i * 4 + 0];
+        const g = data[i * 4 + 1];
+        const b = data[i * 4 + 2];
+        const gray = (r + g + b) / (3 * 255);
+        arr[i] = 1.0 - gray;
+      }
 
-    let x = tf.tensor4d(arr, [1, MODEL_INPUT, MODEL_INPUT, 1]);
+      // 2) [1,28,28,1]
+      let x = tf.tensor4d(arr, [1, 28, 28, 1]);
 
-    if (EMNIST_FIX_MODE === 2) {
-      x = tf.transpose(x, [0, 2, 1, 3]);
-      x = tf.reverse(x, [1, 2]); // flip both axes
-    }
+      // 3) binarize (makes canvas drawings match EMNIST better)
+      x = tf.where(x.greater(tf.scalar(BIN_THRESH)), tf.onesLike(x), tf.zerosLike(x));
 
-    return x;
+      // 4) center by mass (shift to center)
+      x = centerByMass(x);
+
+      // 5) orientation fix (your working one)
+      if (EMNIST_TRANSPOSE) {
+        x = tf.transpose(x, [0, 2, 1, 3]);
+        x = tf.reverse(x, [EMNIST_FLIP_AXIS]);
+      }
+
+      return x;
+    });
+  }
+
+  function centerByMass(x: tf.Tensor4D): tf.Tensor4D {
+    // x: [1,28,28,1] values 0/1
+    return tf.tidy(() => {
+      const img = x.squeeze() as tf.Tensor2D; // [28,28]
+
+      const mass = img.sum().add(1e-6); // avoid divide-by-zero
+
+      // build coordinate grids
+      const ys = tf.tile(tf.range(0, 28).reshape([28, 1]), [1, 28]).toFloat(); // [28,28]
+      const xs = tf.tile(tf.range(0, 28).reshape([1, 28]), [28, 1]).toFloat(); // [28,28]
+
+      const cy = img.mul(ys).sum().div(mass); // scalar
+      const cx = img.mul(xs).sum().div(mass); // scalar
+
+      const shiftY = tf.round(tf.scalar(13.5).sub(cy)).toInt(); // scalar int
+      const shiftX = tf.round(tf.scalar(13.5).sub(cx)).toInt(); // scalar int
+
+      // Convert to JS numbers safely inside tidy
+      const sy = shiftY.arraySync() as number;
+      const sx = shiftX.arraySync() as number;
+
+      const padded = tf.pad(img, [
+        [28, 28],
+        [28, 28],
+      ]); // [84,84]
+
+      const startY = 28 + sy;
+      const startX = 28 + sx;
+
+      const shifted = padded.slice([startY, startX], [28, 28]); // [28,28]
+
+      return shifted.expandDims(0).expandDims(-1) as tf.Tensor4D; // [1,28,28,1]
+    });
   }
 
   async function predict() {
     if (!model) return;
     setStatus("Predicting…");
 
-    // Model outputs [52] now
     const outTensor = tf.tidy(() => {
       const img28 = build28x28FromCanvas();
-      const x = imageDataToTensor28(img28);    // [1,28,28,1]
+      const x = imageDataToTensor28(img28); // [1,28,28,1]
       const y = model.predict(x) as tf.Tensor; // [1,52]
-      return y.squeeze();                      // [52]
+      return y.squeeze(); // [52]
     });
 
     const probs52 = (await outTensor.data()) as Float32Array;
     outTensor.dispose();
 
-    // Sum upper + lower => 26 probs
-    // 0..25 = A..Z, 26..51 = a..z
+    // Merge upper + lower => 26 probs
     const probs26 = new Float32Array(26);
     for (let i = 0; i < 26; i++) {
       probs26[i] = probs52[i] + probs52[i + 26];
     }
 
-    // Top-3 from probs26
+    // top-3
     const indexed = Array.from(probs26).map((p, i) => ({ i, p }));
     indexed.sort((a, b) => b.p - a.p);
+    const top3 = indexed.slice(0, 3).map(({ i, p }) => ({ ch: LETTERS[i], p }));
 
-    const top3 = indexed.slice(0, 3).map(({ i, p }) => ({
-      ch: LETTERS[i],
-      p,
-    }));
+    // confidence gate
+    const best = top3[0];
+    if (best.p < CONF_THRESH) {
+      setMain({ ch: "?", p: best.p });
+      setTop(top3);
+      setStatus("Not sure — try drawing bigger/clearer ✅");
+      return;
+    }
 
-    setMain(top3[0]);
+    setMain(best);
     setTop(top3);
     setStatus("Done ✅");
   }
@@ -337,7 +404,8 @@ export default function Home() {
 
             <div style={styles.h3}>Model input (debug)</div>
             <p style={{ marginTop: 6, opacity: 0.75, fontSize: 13 }}>
-              This shows the 28×28 image after centering/resizing. If this looks rotated, we’ll tweak the transform.
+              This shows the 28×28 image after centering/resizing. If this looks correct but predictions are wrong, preprocessing is the
+              issue (binarize + centering helps a lot).
             </p>
             <canvas ref={previewRef} width={220} height={220} style={{ ...styles.canvas, width: 220, height: 220 }} />
           </div>
