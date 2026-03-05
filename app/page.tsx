@@ -8,7 +8,7 @@ type Pred = { ch: string; p: number };
 const CANVAS_SIZE = 280;
 const MODEL_INPUT = 28;
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const APPLY_EMNIST_FIX = false; 
+const APPLY_EMNIST_FIX = true; 
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
