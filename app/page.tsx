@@ -8,6 +8,7 @@ type Pred = { ch: string; p: number };
 const CANVAS_SIZE = 280;
 const MODEL_INPUT = 28;
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const APPLY_EMNIST_FIX = false; 
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -58,7 +59,7 @@ export default function Home() {
     (async () => {
       try {
         await tf.ready();
-        const m = await tf.loadGraphModel("/model/model.json");
+        const m = await tf.loadGraphModel("/model52/model.json");
         if (!mounted) return;
 
         // warmup
@@ -216,21 +217,21 @@ export default function Home() {
     const data = img28.data;
     const arr = new Float32Array(MODEL_INPUT * MODEL_INPUT);
 
-    // grayscale + normalize, invert so ink is high
     for (let i = 0; i < MODEL_INPUT * MODEL_INPUT; i++) {
       const r = data[i * 4 + 0];
       const g = data[i * 4 + 1];
       const b = data[i * 4 + 2];
       const gray = (r + g + b) / (3 * 255);
-      arr[i] = 1.0 - gray;
+      arr[i] = 1.0 - gray; // invert so ink is high
     }
 
-    // [1,28,28,1]
     let x = tf.tensor4d(arr, [1, MODEL_INPUT, MODEL_INPUT, 1]);
 
-    // EMNIST orientation fix (most common)
-    x = tf.transpose(x, [0, 2, 1, 3]); // swap H<->W
-    x = tf.reverse(x, [2]); // flip width axis
+    // IMPORTANT: only apply this if it actually matches training orientation
+    if (APPLY_EMNIST_FIX) {
+      x = tf.transpose(x, [0, 2, 1, 3]); // swap H<->W
+      x = tf.reverse(x, [2]);            // flip width axis
+    }
 
     return x;
   }
@@ -239,17 +240,26 @@ export default function Home() {
     if (!model) return;
     setStatus("Predicting…");
 
+    // Model outputs [52] now
     const outTensor = tf.tidy(() => {
       const img28 = build28x28FromCanvas();
-      const x = imageDataToTensor28(img28);
-      const y = model.predict(x) as tf.Tensor; // [1,26]
-      return y.squeeze(); // [26]
+      const x = imageDataToTensor28(img28);    // [1,28,28,1]
+      const y = model.predict(x) as tf.Tensor; // [1,52]
+      return y.squeeze();                      // [52]
     });
 
-    const probs = (await outTensor.data()) as Float32Array;
+    const probs52 = (await outTensor.data()) as Float32Array;
     outTensor.dispose();
 
-    const indexed = Array.from(probs).map((p, i) => ({ i, p }));
+    // Sum upper + lower => 26 probs
+    // 0..25 = A..Z, 26..51 = a..z
+    const probs26 = new Float32Array(26);
+    for (let i = 0; i < 26; i++) {
+      probs26[i] = probs52[i] + probs52[i + 26];
+    }
+
+    // Top-3 from probs26
+    const indexed = Array.from(probs26).map((p, i) => ({ i, p }));
     indexed.sort((a, b) => b.p - a.p);
 
     const top3 = indexed.slice(0, 3).map(({ i, p }) => ({
