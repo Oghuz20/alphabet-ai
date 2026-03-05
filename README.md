@@ -11,7 +11,7 @@ The model is **case-insensitive**, meaning that whether the user draws **upperca
 
 # Live Demo
 
-Deployed application: https://alphabet-ai.vercel.app
+Deployed application: https://alphabet-ai-mu.vercel.app
 
 ---
 
