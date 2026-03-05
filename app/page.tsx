@@ -229,7 +229,7 @@ export default function Home() {
 
     if (EMNIST_FIX_MODE === 2) {
       x = tf.transpose(x, [0, 2, 1, 3]);
-      x = tf.reverse(x, [2]); // <-- flip width (fix mirrored letters)
+      x = tf.reverse(x, [1, 2]); // flip both axes
     }
 
     return x;
