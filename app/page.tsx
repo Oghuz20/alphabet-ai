@@ -256,8 +256,12 @@ export default function Home() {
 
       // 5) orientation fix (your working one)
       if (EMNIST_TRANSPOSE) {
+        // Fix left-right mirror first
+        x = tf.reverse(x, [2]);
+
+        // EMNIST orientation fix
         x = tf.transpose(x, [0, 2, 1, 3]);
-        x = tf.reverse(x, [EMNIST_FLIP_AXIS]);
+        x = tf.reverse(x, [1]);
       }
 
       return x;
