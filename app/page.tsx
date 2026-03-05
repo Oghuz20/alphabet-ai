@@ -8,7 +8,7 @@ type Pred = { ch: string; p: number };
 const CANVAS_SIZE = 280;
 const MODEL_INPUT = 28;
 const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const APPLY_EMNIST_FIX = true; 
+const EMNIST_FIX_MODE = 2; 
 
 export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -227,11 +227,9 @@ export default function Home() {
 
     let x = tf.tensor4d(arr, [1, MODEL_INPUT, MODEL_INPUT, 1]);
 
-    // IMPORTANT: only apply this if it actually matches training orientation
-    if (APPLY_EMNIST_FIX) {
-      x = tf.transpose(x, [0, 2, 1, 3]); // swap H<->W
-      x = tf.reverse(x, [2]);            // flip width axis
-    }
+    if (EMNIST_FIX_MODE === 2) {
+      x = tf.transpose(x, [0, 2, 1, 3]);
+      x = tf.reverse(x, [1]);}
 
     return x;
   }
